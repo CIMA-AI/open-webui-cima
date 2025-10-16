@@ -113,35 +113,41 @@ jobs:
           echo "$commits"
 
 
-      - name: Cherry-pick custom commits (prefer my changes; handle empty commits)
+      - name: Cherry-pick custom commits (prefer my changes; with exceptions)
         if: steps.latest.outputs.latest_tag != steps.prev.outputs.prev_tag && steps.custom.outputs.commits != ''
+        env:
+          KEEP_OURS_PATHS: |
+            src/lib/components/chat/Chat.svelte
         run: |
           set -e
       
-          # Helper: check if working tree & index are clean
-          is_clean() {
-            git diff --quiet && git diff --cached --quiet
+          is_exception() {
+            file="$1"
+            while IFS= read -r pat; do
+              [[ -z "$pat" ]] && continue
+              if [[ "$file" == "$pat" ]]; then
+                return 0
+              fi
+            done <<< "${KEEP_OURS_PATHS}"
+            return 1
           }
       
           for c in ${{ steps.custom.outputs.commits }}; do
             echo "Cherry-picking $c (prefer my changes)"
             if git cherry-pick -x -X theirs "$c"; then
-              # Applied cleanly
               continue
             fi
       
-            echo "Cherry-pick failed on $c — inspecting..."
-            # If there's nothing to commit (empty patch), skip it
-            if is_clean; then
-              echo "No changes produced by $c (empty cherry-pick). Skipping."
-              git cherry-pick --skip
-              continue
-            fi
-      
-            # Otherwise, we have conflicts; auto-resolve by keeping *theirs* (your commit) everywhere
+            echo "Cherry-pick failed on $c — inspecting conflicts..."
             conflicted=$(git diff --name-only --diff-filter=U || true)
             if [[ -z "$conflicted" ]]; then
-              echo "::error::Cherry-pick failed but no conflicted paths found (and tree not clean). Aborting."
+              # empty cherry-pick? skip it
+              if git diff --quiet && git diff --cached --quiet; then
+                echo "Empty cherry-pick; skipping."
+                git cherry-pick --skip
+                continue
+              fi
+              echo "::error::Cherry-pick failed but no conflicted paths found."
               git cherry-pick --abort
               exit 2
             fi
@@ -149,17 +155,21 @@ jobs:
             echo "Conflicted files:"
             echo "$conflicted"
       
-            # Keep *theirs* (your change) for all conflicted files
             while IFS= read -r f; do
               [[ -z "$f" ]] && continue
-              echo "  - Keeping *theirs* for $f"
-              git checkout --theirs -- "$f" || true
+              if is_exception "$f"; then
+                echo "  - Keeping *ours* (upstream) for $f"
+                git checkout --ours -- "$f" || true
+              else
+                echo "  - Keeping *theirs* (my commit) for $f"
+                git checkout --theirs -- "$f" || true
+              fi
               git add -- "$f"
             done <<< "$conflicted"
       
-            # If after resolving there are still no changes (rare), skip; else continue
-            if is_clean; then
-              echo "After resolution, patch is empty. Skipping $c."
+            # if still empty after resolving, skip; else continue
+            if git diff --quiet && git diff --cached --quiet; then
+              echo "After resolution, patch is empty. Skipping."
               git cherry-pick --skip
             else
               git cherry-pick --continue
