@@ -19,7 +19,7 @@ concurrency:
   cancel-in-progress: true
 
 permissions:
-  id-token: write     # <-- required for OIDC login to Azure
+  id-token: write     # required for OIDC login to Azure
   contents: write
   pull-requests: write
 
@@ -29,8 +29,8 @@ env:
   DEPLOY_BRANCH: main
 
   # ACR config (we'll resolve loginServer dynamically)
-  ACR_NAME: crcimaopenwebui                # <--- your ACR resource name (not the FQDN)
-  IMAGE_REPO: open-webui-cima              # <--- repository path inside ACR (e.g., myapp/backend)
+  ACR_NAME: crcimaopenwebui                # your ACR resource name (not the FQDN)
+  IMAGE_REPO: open-webui-cima              # repository path inside ACR (e.g., myapp/backend)
 
   # Control steps
   PUSH_IMAGE: "true"
@@ -102,9 +102,14 @@ jobs:
         if: steps.latest.outputs.latest_tag != steps.prev.outputs.prev_tag
         run: |
           prev="${{ steps.prev.outputs.prev_tag }}"
+          # Collect commits unique to DEPLOY_BRANCH since prev_tag (old baseline)
           commits=$(git rev-list --reverse --no-merges "${prev}..origin/${{ env.DEPLOY_BRANCH }}")
-          echo "commits=$commits" >> "$GITHUB_OUTPUT"
-          echo "Custom commits to apply (oldest -> newest):"
+
+          # Convert newlines to spaces for safe GitHub output
+          commits_space=$(echo "$commits" | tr '\n' ' ' | xargs)
+          echo "commits=$commits_space" >> "$GITHUB_OUTPUT"
+
+          echo "Custom commits (oldest → newest):"
           echo "$commits"
 
       - name: Cherry-pick custom commits
@@ -114,7 +119,7 @@ jobs:
           for c in ${{ steps.custom.outputs.commits }}; do
             echo "Cherry-picking $c"
             git cherry-pick -x "$c" || {
-              echo "::error::Cherry-pick conflict at $c"
+              echo "::error::Cherry-pick conflict on commit $c"
               git cherry-pick --abort
               exit 2
             }
@@ -132,7 +137,7 @@ jobs:
         uses: azure/login@v2
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id:  ${{ secrets.AZURE_TENANT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
       # Resolve the ACR login server so we don't hardcode it
@@ -168,5 +173,3 @@ jobs:
             ${{ steps.img.outputs.latest }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
-
-     
