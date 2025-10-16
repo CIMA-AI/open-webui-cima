@@ -211,5 +211,3 @@ jobs:
           tags: |
             ${{ steps.img.outputs.name }}
             ${{ steps.img.outputs.latest }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
