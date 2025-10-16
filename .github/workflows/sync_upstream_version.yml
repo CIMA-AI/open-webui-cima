@@ -112,19 +112,36 @@ jobs:
           echo "Custom commits (oldest → newest):"
           echo "$commits"
 
-      - name: Cherry-pick custom commits
+      - name: Cherry-pick custom commits (with conflict handler)
         if: steps.latest.outputs.latest_tag != steps.prev.outputs.prev_tag && steps.custom.outputs.commits != ''
         run: |
           set -e
           for c in ${{ steps.custom.outputs.commits }}; do
             echo "Cherry-picking $c"
-            git cherry-pick -x "$c" || {
-              echo "::error::Cherry-pick conflict on commit $c"
+            if git cherry-pick -x "$c"; then
+              continue
+            fi
+      
+            echo "Cherry-pick failed on $c — inspecting conflicts..."
+            conflicted=$(git diff --name-only --diff-filter=U || true)
+            echo "Conflicted files:"
+            echo "$conflicted"
+      
+            # Case: your commit tried to delete a workflow that upstream modified
+            if echo "$conflicted" | grep -qx '\.github/workflows/deploy-to-hf-spaces\.yml'; then
+              echo "Auto-resolving by keeping upstream version of deploy-to-hf-spaces.yml"
+              # Keep upstream's content of the file
+              git checkout --theirs .github/workflows/deploy-to-hf-spaces.yml
+              git add .github/workflows/deploy-to-hf-spaces.yml
+              git cherry-pick --continue
+              # Flag so we can disable it later
+              echo "needs_disable=true" >> $GITHUB_ENV
+            else
+              echo "::error::Unhandled conflict. Aborting so you can resolve manually."
               git cherry-pick --abort
               exit 2
-            }
+            fi
           done
-
       - name: Update baseline marker
         if: steps.latest.outputs.latest_tag != steps.prev.outputs.prev_tag
         run: |
@@ -173,3 +190,10 @@ jobs:
             ${{ steps.img.outputs.latest }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+      - name: Disable HF Spaces workflow (by renaming)
+        if: env.needs_disable == 'true' && steps.latest.outputs.latest_tag != steps.prev.outputs.prev_tag
+        run: |
+          if [ -f .github/workflows/deploy-to-hf-spaces.yml ]; then
+            git mv .github/workflows/deploy-to-hf-spaces.yml .github/workflows/deploy-to-hf-spaces.yml.disabled
+            git commit -m "chore: disable HF Spaces workflow by renaming to .disabled"
+          fi
