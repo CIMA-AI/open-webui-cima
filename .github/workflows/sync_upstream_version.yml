@@ -113,35 +113,35 @@ jobs:
           echo "$commits"
 
 
-      - name: Cherry-pick custom commits (prefer my changes; with exceptions)
+      - name: Cherry-pick custom commits (prefer my changes; handle empty commits)
         if: steps.latest.outputs.latest_tag != steps.prev.outputs.prev_tag && steps.custom.outputs.commits != ''
-        env:
-          KEEP_OURS_PATHS: |
-
         run: |
           set -e
       
-          is_exception() {
-            file="$1"
-            while IFS= read -r pat; do
-              [[ -z "$pat" ]] && continue
-              if [[ "$file" == "$pat" ]]; then
-                return 0
-              fi
-            done <<< "${KEEP_OURS_PATHS}"
-            return 1
+          # Helper: check if working tree & index are clean
+          is_clean() {
+            git diff --quiet && git diff --cached --quiet
           }
       
           for c in ${{ steps.custom.outputs.commits }}; do
             echo "Cherry-picking $c (prefer my changes)"
             if git cherry-pick -x -X theirs "$c"; then
+              # Applied cleanly
               continue
             fi
       
-            echo "Cherry-pick failed on $c — inspecting conflicts..."
+            echo "Cherry-pick failed on $c — inspecting..."
+            # If there's nothing to commit (empty patch), skip it
+            if is_clean; then
+              echo "No changes produced by $c (empty cherry-pick). Skipping."
+              git cherry-pick --skip
+              continue
+            fi
+      
+            # Otherwise, we have conflicts; auto-resolve by keeping *theirs* (your commit) everywhere
             conflicted=$(git diff --name-only --diff-filter=U || true)
             if [[ -z "$conflicted" ]]; then
-              echo "::error::Cherry-pick failed but no conflicted paths found."
+              echo "::error::Cherry-pick failed but no conflicted paths found (and tree not clean). Aborting."
               git cherry-pick --abort
               exit 2
             fi
@@ -149,27 +149,20 @@ jobs:
             echo "Conflicted files:"
             echo "$conflicted"
       
-            # Auto-resolve each conflicted file
-            resolved_any=0
+            # Keep *theirs* (your change) for all conflicted files
             while IFS= read -r f; do
               [[ -z "$f" ]] && continue
-              if is_exception "$f"; then
-                echo "  - Keeping *ours* (upstream) for $f (exception)"
-                git checkout --ours -- "$f" || true
-              else
-                echo "  - Keeping *theirs* (my commit) for $f"
-                git checkout --theirs -- "$f" || true
-              fi
+              echo "  - Keeping *theirs* for $f"
+              git checkout --theirs -- "$f" || true
               git add -- "$f"
-              resolved_any=1
             done <<< "$conflicted"
       
-            if [[ "$resolved_any" -eq 1 ]]; then
-              git cherry-pick --continue
+            # If after resolving there are still no changes (rare), skip; else continue
+            if is_clean; then
+              echo "After resolution, patch is empty. Skipping $c."
+              git cherry-pick --skip
             else
-              echo "::error::Could not resolve conflicts automatically."
-              git cherry-pick --abort
-              exit 2
+              git cherry-pick --continue
             fi
           done
       - name: Update baseline marker
@@ -220,10 +213,3 @@ jobs:
             ${{ steps.img.outputs.latest }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
-      - name: Disable HF Spaces workflow (by renaming)
-        if: env.needs_disable == 'true' && steps.latest.outputs.latest_tag != steps.prev.outputs.prev_tag
-        run: |
-          if [ -f .github/workflows/deploy-to-hf-spaces.yml ]; then
-            git mv .github/workflows/deploy-to-hf-spaces.yml .github/workflows/deploy-to-hf-spaces.yml.disabled
-            git commit -m "chore: disable HF Spaces workflow by renaming to .disabled"
-          fi
