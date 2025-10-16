@@ -113,26 +113,50 @@ jobs:
           echo "$commits"
 
 
-      - name: Cherry-pick custom commits (prefer my changes; with exceptions)
+      - name: Cherry-pick custom commits (prefer my changes; skip specific commits; with exceptions)
         if: steps.latest.outputs.latest_tag != steps.prev.outputs.prev_tag && steps.custom.outputs.commits != ''
         env:
+          # commits to SKIP (prefixes or full SHAs, one per line)
+          SKIP_COMMITS: |
+            a07f1d0d7
+            b5eca896f
           KEEP_OURS_PATHS: |
             src/lib/components/chat/Chat.svelte
         run: |
           set -e
       
-          is_exception() {
-            file="$1"
+          in_skip_list() {
+            local sha="$1"
             while IFS= read -r pat; do
               [[ -z "$pat" ]] && continue
-              if [[ "$file" == "$pat" ]]; then
+              # prefix match (handles short vs full SHA)
+              if [[ "$sha" == "$pat"* ]]; then
                 return 0
               fi
+            done <<< "${SKIP_COMMITS}"
+            return 1
+          }
+      
+          is_exception() {
+            local file="$1"
+            while IFS= read -r pat; do
+              [[ -z "$pat" ]] && continue
+              [[ "$file" == "$pat" ]] && return 0
             done <<< "${KEEP_OURS_PATHS}"
             return 1
           }
       
+          # helper to detect empty worktree/index
+          is_clean() {
+            git diff --quiet && git diff --cached --quiet
+          }
+      
           for c in ${{ steps.custom.outputs.commits }}; do
+            if in_skip_list "$c"; then
+              echo "Skipping $c (on skip list)"
+              continue
+            fi
+      
             echo "Cherry-picking $c (prefer my changes)"
             if git cherry-pick -x -X theirs "$c"; then
               continue
@@ -140,13 +164,15 @@ jobs:
       
             echo "Cherry-pick failed on $c — inspecting conflicts..."
             conflicted=$(git diff --name-only --diff-filter=U || true)
+      
+            # Empty cherry-pick? skip it.
+            if [[ -z "$conflicted" ]] && is_clean; then
+              echo "Empty cherry-pick; skipping."
+              git cherry-pick --skip
+              continue
+            fi
+      
             if [[ -z "$conflicted" ]]; then
-              # empty cherry-pick? skip it
-              if git diff --quiet && git diff --cached --quiet; then
-                echo "Empty cherry-pick; skipping."
-                git cherry-pick --skip
-                continue
-              fi
               echo "::error::Cherry-pick failed but no conflicted paths found."
               git cherry-pick --abort
               exit 2
@@ -155,6 +181,7 @@ jobs:
             echo "Conflicted files:"
             echo "$conflicted"
       
+            # Resolve: default keep *theirs* (your commit); exceptions keep *ours* (upstream)
             while IFS= read -r f; do
               [[ -z "$f" ]] && continue
               if is_exception "$f"; then
@@ -167,8 +194,7 @@ jobs:
               git add -- "$f"
             done <<< "$conflicted"
       
-            # if still empty after resolving, skip; else continue
-            if git diff --quiet && git diff --cached --quiet; then
+            if is_clean; then
               echo "After resolution, patch is empty. Skipping."
               git cherry-pick --skip
             else
