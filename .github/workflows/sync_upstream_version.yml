@@ -127,17 +127,16 @@ jobs:
             echo "Conflicted files:"
             echo "$conflicted"
       
-            # Case: your commit tried to delete a workflow that upstream modified
-            if echo "$conflicted" | grep -qx '\.github/workflows/deploy-to-hf-spaces\.yml'; then
-              echo "Auto-resolving by keeping upstream version of deploy-to-hf-spaces.yml"
-              # Keep upstream's content of the file
-              git checkout --theirs .github/workflows/deploy-to-hf-spaces.yml
-              git add .github/workflows/deploy-to-hf-spaces.yml
+            target=".github/workflows/deploy-to-hf-spaces.yml"
+            if echo "$conflicted" | grep -qx "$target"; then
+              echo "Auto-resolving $target by keeping *ours* (upstream version)"
+              # If the incoming commit deleted the file, there is no :3 (theirs) stage — so keep ours.
+              git checkout --ours "$target" || true
+              git add "$target"
               git cherry-pick --continue
-              # Flag so we can disable it later
-              echo "needs_disable=true" >> $GITHUB_ENV
+              echo "needs_disable=true" >> "$GITHUB_ENV"
             else
-              echo "::error::Unhandled conflict. Aborting so you can resolve manually."
+              echo "::error::Unhandled conflict(s). Aborting so you can resolve manually."
               git cherry-pick --abort
               exit 2
             fi
