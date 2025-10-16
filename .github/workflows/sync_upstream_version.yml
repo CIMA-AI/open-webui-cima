@@ -112,31 +112,62 @@ jobs:
           echo "Custom commits (oldest → newest):"
           echo "$commits"
 
-      - name: Cherry-pick custom commits (with conflict handler)
+
+      - name: Cherry-pick custom commits (prefer my changes; with exceptions)
         if: steps.latest.outputs.latest_tag != steps.prev.outputs.prev_tag && steps.custom.outputs.commits != ''
+        env:
+          KEEP_OURS_PATHS: |
+
         run: |
           set -e
+      
+          is_exception() {
+            file="$1"
+            while IFS= read -r pat; do
+              [[ -z "$pat" ]] && continue
+              if [[ "$file" == "$pat" ]]; then
+                return 0
+              fi
+            done <<< "${KEEP_OURS_PATHS}"
+            return 1
+          }
+      
           for c in ${{ steps.custom.outputs.commits }}; do
-            echo "Cherry-picking $c"
-            if git cherry-pick -x "$c"; then
+            echo "Cherry-picking $c (prefer my changes)"
+            if git cherry-pick -x -X theirs "$c"; then
               continue
             fi
       
             echo "Cherry-pick failed on $c — inspecting conflicts..."
             conflicted=$(git diff --name-only --diff-filter=U || true)
+            if [[ -z "$conflicted" ]]; then
+              echo "::error::Cherry-pick failed but no conflicted paths found."
+              git cherry-pick --abort
+              exit 2
+            fi
+      
             echo "Conflicted files:"
             echo "$conflicted"
       
-            target=".github/workflows/deploy-to-hf-spaces.yml"
-            if echo "$conflicted" | grep -qx "$target"; then
-              echo "Auto-resolving $target by keeping *ours* (upstream version)"
-              # If the incoming commit deleted the file, there is no :3 (theirs) stage — so keep ours.
-              git checkout --ours "$target" || true
-              git add "$target"
+            # Auto-resolve each conflicted file
+            resolved_any=0
+            while IFS= read -r f; do
+              [[ -z "$f" ]] && continue
+              if is_exception "$f"; then
+                echo "  - Keeping *ours* (upstream) for $f (exception)"
+                git checkout --ours -- "$f" || true
+              else
+                echo "  - Keeping *theirs* (my commit) for $f"
+                git checkout --theirs -- "$f" || true
+              fi
+              git add -- "$f"
+              resolved_any=1
+            done <<< "$conflicted"
+      
+            if [[ "$resolved_any" -eq 1 ]]; then
               git cherry-pick --continue
-              echo "needs_disable=true" >> "$GITHUB_ENV"
             else
-              echo "::error::Unhandled conflict(s). Aborting so you can resolve manually."
+              echo "::error::Could not resolve conflicts automatically."
               git cherry-pick --abort
               exit 2
             fi
