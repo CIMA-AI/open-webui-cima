@@ -39,6 +39,7 @@ RestrictedPython==8.0
 loguru==0.7.3
 asgiref==3.8.1
 
+
 # AI libraries
 openai
 anthropic
@@ -147,3 +148,5 @@ opentelemetry-instrumentation-requests==0.57b0
 opentelemetry-instrumentation-logging==0.57b0
 opentelemetry-instrumentation-httpx==0.57b0
 opentelemetry-instrumentation-aiohttp-client==0.57b0
+# Datadog Trace SDK
+ddtrace
