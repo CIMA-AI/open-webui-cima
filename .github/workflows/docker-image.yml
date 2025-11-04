@@ -2,7 +2,7 @@ name: Build and Push to Azure Container Registry
 
 on:
   push:
-    branches: [ "main2" ]      # Or whichever branch you want to trigger on
+    branches: [ "main" ]      # Or whichever branch you want to trigger on
   workflow_dispatch:          # Allows manual triggering in GitHub UI
 
 permissions:
@@ -29,6 +29,6 @@ jobs:
 
       - name: Build and push image to ACR
         run: |
-          IMAGE_TAG=crcimaopenwebui-bvfjb7gfc8cnb5cu.azurecr.io/open-webui-cima:libreOffice
+          IMAGE_TAG=crcimaopenwebui-bvfjb7gfc8cnb5cu.azurecr.io/open-webui-cima:Datadog-POC
           docker build -t $IMAGE_TAG .
           docker push $IMAGE_TAG

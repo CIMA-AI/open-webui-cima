@@ -1,3 +1,4 @@
+from ddtrace.llmobs import LLMObs
 import asyncio
 import inspect
 import json
@@ -401,6 +402,9 @@ from open_webui.config import (
     reset_config,
 )
 from open_webui.env import (
+    DATADOG_API_KEY,
+    DATADOG_APP_NAME,
+    DATADOG_SITE,
     LICENSE_KEY,
     AUDIT_EXCLUDED_PATHS,
     AUDIT_LOG_LEVEL,
@@ -581,6 +585,14 @@ async def lifespan(app: FastAPI):
     if hasattr(app.state, "redis_task_command_listener"):
         app.state.redis_task_command_listener.cancel()
 
+LLMObs.enable(
+  ml_app=DATADOG_APP_NAME,
+  api_key=DATADOG_API_KEY,
+  site=DATADOG_SITE,
+  agentless_enabled=True,
+)
+
+print(f"Datadog LLM Observability enabled for {DATADOG_APP_NAME} and site {DATADOG_SITE}")
 
 app = FastAPI(
     title="Open WebUI",
@@ -588,7 +600,8 @@ app = FastAPI(
     openapi_url="/openapi.json" if ENV == "dev" else None,
     redoc_url=None,
     lifespan=lifespan,
-)
+)   
+
 
 oauth_manager = OAuthManager(app)
 

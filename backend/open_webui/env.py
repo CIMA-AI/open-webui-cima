@@ -138,6 +138,15 @@ VERSION = PACKAGE_DATA["version"]
 INSTANCE_ID = os.environ.get("INSTANCE_ID", str(uuid4()))
 
 
+####################################
+# DATADOG INTEGRATION
+####################################
+DATADOG_API_KEY = os.environ.get("DATADOG_API_KEY", "")
+DATADOG_APP_NAME = os.environ.get("DATADOG_APP_NAME", "open-webui")
+DATADOG_SITE = os.environ.get("DATADOG_SITE", "datadoghq.com")
+
+
+
 # Function to parse each section
 def parse_section(section):
     items = []

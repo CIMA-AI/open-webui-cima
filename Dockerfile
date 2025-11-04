@@ -114,7 +114,7 @@ RUN apt-get update && \
     git build-essential pandoc gcc netcat-openbsd curl jq \
     python3-dev \
     libreoffice-core libreoffice-common \
-    libreoffice-writer libreoffice-calc libreoffice-impress libreoffice-draw \
+    libreoffice-writer libreoffice-calc libreoffice-impress libreoffice-draw \ ddtrace \
     ffmpeg libsm6 libxext6 \
     && rm -rf /var/lib/apt/lists/*
 
