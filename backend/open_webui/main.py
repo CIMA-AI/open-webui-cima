@@ -525,6 +525,13 @@ https://github.com/open-webui/open-webui
 """
 )
 
+LLMObs.enable(
+  ml_app=DATADOG_APP_NAME,
+  api_key=DATADOG_API_KEY,
+  site=DATADOG_SITE,
+  agentless_enabled=False,
+)
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -590,6 +597,10 @@ async def lifespan(app: FastAPI):
 
 print("ddtrace version:", ddtrace.__version__)
 print("APM tracer enabled?:", tracer.enabled)
+tracer.enabled = False
+
+print("APM tracer enabled?:", tracer.enabled)
+
 w = getattr(tracer, "_writer", None)
 print("Writer class:", type(w).__name__ if w else None)
 for attr in ("intake_url", "_intake_url", "_url"):
@@ -601,12 +612,8 @@ for k, v in sorted(os.environ.items()):
     if k.startswith("DD_") and "KEY" not in k:
         print(f"  {k}={v}")
 
-LLMObs.enable(
-  ml_app=DATADOG_APP_NAME,
-  api_key=DATADOG_API_KEY,
-  site=DATADOG_SITE,
-  agentless_enabled=False,
-)
+
+
 
 print(LLMObs.__dict__)
 print(f"Datadog LLM Observability enabled for {DATADOG_APP_NAME} and site {DATADOG_SITE}")
