@@ -29,6 +29,6 @@ jobs:
 
       - name: Build and push image to ACR
         run: |
-          IMAGE_TAG=crcimaopenwebui-bvfjb7gfc8cnb5cu.azurecr.io/open-webui-cima:Datadog-POC-2
+          IMAGE_TAG=crcimaopenwebui-bvfjb7gfc8cnb5cu.azurecr.io/open-webui-cima:Datadog-POC-3
           docker build -t $IMAGE_TAG .
           docker push $IMAGE_TAG

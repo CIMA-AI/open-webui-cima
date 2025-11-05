@@ -1,4 +1,7 @@
 from ddtrace.llmobs import LLMObs
+import os, ddtrace
+from ddtrace import tracer
+
 import asyncio
 import inspect
 import json
@@ -585,6 +588,19 @@ async def lifespan(app: FastAPI):
     if hasattr(app.state, "redis_task_command_listener"):
         app.state.redis_task_command_listener.cancel()
 
+print("ddtrace version:", ddtrace.__version__)
+print("APM tracer enabled?:", tracer.enabled)
+w = getattr(tracer, "_writer", None)
+print("Writer class:", type(w).__name__ if w else None)
+for attr in ("intake_url", "_intake_url", "_url"):
+    if w and hasattr(w, attr):
+        print("Writer target:", getattr(w, attr))
+
+print("Selected DD_* env (no secrets):")
+for k, v in sorted(os.environ.items()):
+    if k.startswith("DD_") and "KEY" not in k:
+        print(f"  {k}={v}")
+
 LLMObs.enable(
   ml_app=DATADOG_APP_NAME,
   api_key=DATADOG_API_KEY,
@@ -592,6 +608,7 @@ LLMObs.enable(
   agentless_enabled=False,
 )
 
+print(LLMObs.__dict__)
 print(f"Datadog LLM Observability enabled for {DATADOG_APP_NAME} and site {DATADOG_SITE}")
 
 app = FastAPI(
