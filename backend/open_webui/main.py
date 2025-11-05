@@ -589,7 +589,7 @@ LLMObs.enable(
   ml_app=DATADOG_APP_NAME,
   api_key=DATADOG_API_KEY,
   site=DATADOG_SITE,
-  agentless_enabled=True,
+  agentless_enabled=False,
 )
 
 print(f"Datadog LLM Observability enabled for {DATADOG_APP_NAME} and site {DATADOG_SITE}")
