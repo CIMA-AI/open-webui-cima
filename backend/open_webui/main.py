@@ -1,4 +1,5 @@
 from ddtrace.llmobs import LLMObs
+from ddtrace.llmobs.decorators import embedding, llm
 import os, ddtrace
 from ddtrace import tracer
 
@@ -525,11 +526,15 @@ https://github.com/open-webui/open-webui
 """
 )
 
+
+if not DATADOG_API_KEY or not DATADOG_SITE:
+    raise RuntimeError(f"Missing Datadog config. API_KEY={bool(DATADOG_API_KEY)} SITE={DATADOG_SITE}")
+
 LLMObs.enable(
   ml_app=DATADOG_APP_NAME,
   api_key=DATADOG_API_KEY,
   site=DATADOG_SITE,
-  agentless_enabled=False,
+  agentless_enabled=True,
 )
 
 
@@ -595,27 +600,10 @@ async def lifespan(app: FastAPI):
     if hasattr(app.state, "redis_task_command_listener"):
         app.state.redis_task_command_listener.cancel()
 
-print("ddtrace version:", ddtrace.__version__)
-print("APM tracer enabled?:", tracer.enabled)
-tracer.enabled = False
-
-print("APM tracer enabled?:", tracer.enabled)
-
-w = getattr(tracer, "_writer", None)
-print("Writer class:", type(w).__name__ if w else None)
-for attr in ("intake_url", "_intake_url", "_url"):
-    if w and hasattr(w, attr):
-        print("Writer target:", getattr(w, attr))
-
-print("Selected DD_* env (no secrets):")
-for k, v in sorted(os.environ.items()):
-    if k.startswith("DD_") and "KEY" not in k:
-        print(f"  {k}={v}")
 
 
 
 
-print(LLMObs.__dict__)
 print(f"Datadog LLM Observability enabled for {DATADOG_APP_NAME} and site {DATADOG_SITE}")
 
 app = FastAPI(
@@ -1400,7 +1388,7 @@ async def get_base_models(request: Request, user=Depends(get_admin_user)):
 # Embeddings
 ##################################
 
-
+# in this case the model is static, but what happens if decidc
 @app.post("/api/embeddings")
 @app.post("/api/v1/embeddings")  # Experimental: Compatibility with OpenAI API
 async def embeddings(
@@ -1424,6 +1412,8 @@ async def embeddings(
     # Make sure models are loaded in app state
     if not request.app.state.MODELS:
         await get_all_models(request, user=user)
+    # TODO DATADOG
+    #@embedding(model_name=form_data.get("model", "Err"), model_provider="openai")
     # Use generic dispatcher in utils.embeddings
     return await generate_embeddings(request, form_data, user)
 
@@ -1523,7 +1513,8 @@ async def chat_completion(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(e),
         )
-
+    #TODO DATADOG
+    #@llm(model_name=model, name="llm", model_provider="default")
     async def process_chat(request, form_data, user, metadata, model):
         try:
             form_data, metadata, events = await process_chat_payload(

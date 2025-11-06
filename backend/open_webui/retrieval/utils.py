@@ -77,7 +77,8 @@ class VectorSearchRetriever(BaseRetriever):
             )
         return results
 
-
+#TODO 
+#@retrieval
 def query_doc(
     collection_name: str, query_embedding: list[float], k: int, user: UserModel = None
 ):
@@ -88,7 +89,16 @@ def query_doc(
             vectors=[query_embedding],
             limit=k,
         )
-
+        #TODO
+        # at this point we only have the embedded question
+        # 
+        # LLMObs.annotate(
+        #     input_data=question,
+        #     output_data = [ id": doc.id, "score": doc.score, "text": doc.text, "name": doc.name} for doc in results]
+        #     output_data = [
+        #         {"id": doc.id, "score": doc.score, "text": doc.text, "name": doc.name} for doc in context_documents
+        #     ]
+        # )
         if result:
             log.info(f"query_doc:result {result.ids} {result.metadatas}")
 
