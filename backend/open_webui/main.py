@@ -1420,6 +1420,8 @@ async def embeddings(
 
 @app.post("/api/chat/completions")
 @app.post("/api/v1/chat/completions")  # Experimental: Compatibility with OpenAI API
+#TODO DATADOG
+#
 async def chat_completion(
     request: Request,
     form_data: dict,
@@ -1513,8 +1515,8 @@ async def chat_completion(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(e),
         )
-    #TODO DATADOG
-    #@llm(model_name=model, name="llm", model_provider="default")
+        
+    @llm(model_name=model, name="llm", model_provider="default")
     async def process_chat(request, form_data, user, metadata, model):
         try:
             form_data, metadata, events = await process_chat_payload(
