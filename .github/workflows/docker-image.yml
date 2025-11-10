@@ -1,9 +1,14 @@
 name: Build and Push to Azure Container Registry
 
 on:
-  push:
-    branches: [ "main" ]      # Or whichever branch you want to trigger on
-  workflow_dispatch:          # Allows manual triggering in GitHub UI
+  # push:
+  #   branches: ["main"]
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "Enter the image tag (e.g., datadog-poc-5 or feature-x-test)"
+        required: true
+        default: "manual-tag"
 
 permissions:
   id-token: write
@@ -24,11 +29,12 @@ jobs:
           subscription-id: ${{secrets.AZURE_SUBSCRIPTION_ID}}
 
       - name: Log in to Azure Container Registry (ACR)
-        run: |
-          az acr login --name crcimaopenwebui
+        run: az acr login --name crcimaopenwebui
 
       - name: Build and push image to ACR
         run: |
-          IMAGE_TAG=crcimaopenwebui-bvfjb7gfc8cnb5cu.azurecr.io/open-webui-cima:Datadog-POC-4
-          docker build -t $IMAGE_TAG .
-          docker push $IMAGE_TAG
+          IMAGE_TAG=${{ github.event.inputs.image_tag }}
+          FULL_IMAGE=crcimaopenwebui-bvfjb7gfc8cnb5cu.azurecr.io/open-webui-cima:${IMAGE_TAG}
+          echo "Building and pushing image: $FULL_IMAGE"
+          docker build -t $FULL_IMAGE .
+          docker push $FULL_IMAGE
