@@ -1,5 +1,5 @@
 from ddtrace.llmobs import LLMObs
-from ddtrace.llmobs.decorators import embedding, llm
+from ddtrace.llmobs.decorators import  llm
 import os, ddtrace
 from ddtrace import tracer
 
@@ -1413,7 +1413,6 @@ async def embeddings(
     if not request.app.state.MODELS:
         await get_all_models(request, user=user)
     # TODO DATADOG
-    #@embedding(model_name=form_data.get("model", "Err"), model_provider="openai")
     # Use generic dispatcher in utils.embeddings
     return await generate_embeddings(request, form_data, user)
 

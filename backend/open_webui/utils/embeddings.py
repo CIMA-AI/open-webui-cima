@@ -1,7 +1,7 @@
 import random
 import logging
 import sys
-
+from ddtrace.llmobs.decorators import  embedding
 from fastapi import Request
 from open_webui.models.users import UserModel
 from open_webui.models.models import Models
@@ -22,7 +22,9 @@ logging.basicConfig(stream=sys.stdout, level=GLOBAL_LOG_LEVEL)
 log = logging.getLogger(__name__)
 log.setLevel(SRC_LOG_LEVELS["MAIN"])
 
-
+#TODO DATADOG
+# HARD CODED MODEL NAME, TO BE DYNAMIC
+@embedding(model_name="text-embedding-3-small", model_provider="openai")
 async def generate_embeddings(
     request: Request,
     form_data: dict,

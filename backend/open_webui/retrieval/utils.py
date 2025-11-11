@@ -1,7 +1,7 @@
 import logging
 import os
 from typing import Optional, Union
-
+from ddtrace.llmobs.decorators import retrieval
 import requests
 import hashlib
 from concurrent.futures import ThreadPoolExecutor
@@ -78,7 +78,7 @@ class VectorSearchRetriever(BaseRetriever):
         return results
 
 #TODO 
-#@retrieval
+@retrieval
 def query_doc(
     collection_name: str, query_embedding: list[float], k: int, user: UserModel = None
 ):
