@@ -1515,7 +1515,6 @@ async def chat_completion(
             detail=str(e),
         )
         
-    @llm(model_name=model, name="llm", model_provider="default")
     async def process_chat(request, form_data, user, metadata, model):
         try:
             form_data, metadata, events = await process_chat_payload(

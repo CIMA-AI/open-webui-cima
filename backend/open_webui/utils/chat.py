@@ -12,7 +12,8 @@ import asyncio
 
 from fastapi import Request, status
 from starlette.responses import Response, StreamingResponse, JSONResponse
-
+from ddtrace.llmobs import LLMObs
+from ddtrace.llmobs.decorators import llm
 
 from open_webui.models.users import UserModel
 
@@ -156,8 +157,6 @@ async def generate_direct_chat_completion(
             raise Exception(res["error"])
 
         return res
-
-
 async def generate_chat_completion(
     request: Request,
     form_data: dict,
@@ -168,19 +167,16 @@ async def generate_chat_completion(
     if BYPASS_MODEL_ACCESS_CONTROL:
         bypass_filter = True
 
+    # propagate metadata
     if hasattr(request.state, "metadata"):
-        if "metadata" not in form_data:
-            form_data["metadata"] = request.state.metadata
-        else:
-            form_data["metadata"] = {
-                **form_data["metadata"],
-                **request.state.metadata,
-            }
-
-    if getattr(request.state, "direct", False) and hasattr(request.state, "model"):
-        models = {
-            request.state.model["id"]: request.state.model,
+        form_data["metadata"] = {
+            **form_data.get("metadata", {}),
+            **request.state.metadata,
         }
+
+    # resolve models map
+    if getattr(request.state, "direct", False) and hasattr(request.state, "model"):
+        models = {request.state.model["id"]: request.state.model}
         log.debug(f"direct connection to model: {models}")
     else:
         models = request.app.state.MODELS
@@ -191,96 +187,260 @@ async def generate_chat_completion(
 
     model = models[model_id]
 
-    if getattr(request.state, "direct", False):
-        return await generate_direct_chat_completion(
-            request, form_data, user=user, models=models
-        )
-    else:
-        # Check if user has access to the model
+    # access control
+    if not getattr(request.state, "direct", False):
         if not bypass_filter and user.role == "user":
-            try:
-                check_model_access(user, model)
-            except Exception as e:
-                raise e
+            check_model_access(user, model)
 
+    # ---- derive stable strings for LLMObs
+    # model_name (e.g., "gpt-4o", "text-embedding-3-small", "mistral-large")
+    model_name_str = model.get("id") or model_id or "unknown"
+
+    # provider string recognized by LLMObs
+    owned_by = (model.get("owned_by") or "").lower()
+    if owned_by in ("openai", "azure-openai", "ollama"):
+        model_provider = owned_by
+    elif owned_by == "arena":
+        # arena picks a downstream model; treat as gateway
+        model_provider = "gateway"
+    elif model.get("pipe"):
+        # tool/function pipe – still an LLM call but routed; mark as gateway
+        model_provider = "gateway"
+    else:
+        # everything else via your LiteLLM gateway
+        model_provider = "gateway"
+
+    # ---- define a decorated inner fn with the strings baked in
+    @llm(model_name=model_name_str, model_provider=model_provider, name="chat.completions.create")
+    async def _do_generate():
+        # (optional) annotate inputs for richer span details
+        try:
+            LLMObs.annotate(
+                input_data=form_data.get("messages"),
+                metadata={
+                    "chat_id": form_data.get("metadata", {}).get("chat_id"),
+                    "session_id": form_data.get("metadata", {}).get("session_id"),
+                    "direct": getattr(request.state, "direct", False),
+                },
+            )
+        except Exception:
+            pass
+
+        # --- your existing branching logic unchanged ---
         if model.get("owned_by") == "arena":
             model_ids = model.get("info", {}).get("meta", {}).get("model_ids")
             filter_mode = model.get("info", {}).get("meta", {}).get("filter_mode")
             if model_ids and filter_mode == "exclude":
                 model_ids = [
-                    model["id"]
-                    for model in list(request.app.state.MODELS.values())
-                    if model.get("owned_by") != "arena" and model["id"] not in model_ids
+                    m["id"]
+                    for m in list(request.app.state.MODELS.values())
+                    if m.get("owned_by") != "arena" and m["id"] not in model_ids
                 ]
 
-            selected_model_id = None
-            if isinstance(model_ids, list) and model_ids:
-                selected_model_id = random.choice(model_ids)
-            else:
+            if not (isinstance(model_ids, list) and model_ids):
                 model_ids = [
-                    model["id"]
-                    for model in list(request.app.state.MODELS.values())
-                    if model.get("owned_by") != "arena"
+                    m["id"]
+                    for m in list(request.app.state.MODELS.values())
+                    if m.get("owned_by") != "arena"
                 ]
-                selected_model_id = random.choice(model_ids)
 
+            selected_model_id = random.choice(model_ids)
             form_data["model"] = selected_model_id
 
-            if form_data.get("stream") == True:
-
+            if form_data.get("stream") is True:
                 async def stream_wrapper(stream):
                     yield f"data: {json.dumps({'selected_model_id': selected_model_id})}\n\n"
                     async for chunk in stream:
                         yield chunk
 
-                response = await generate_chat_completion(
-                    request, form_data, user, bypass_filter=True
-                )
+                response = await generate_chat_completion(request, form_data, user, bypass_filter=True)
                 return StreamingResponse(
                     stream_wrapper(response.body_iterator),
                     media_type="text/event-stream",
                     background=response.background,
                 )
             else:
-                return {
-                    **(
-                        await generate_chat_completion(
-                            request, form_data, user, bypass_filter=True
-                        )
-                    ),
-                    "selected_model_id": selected_model_id,
-                }
+                result = await generate_chat_completion(request, form_data, user, bypass_filter=True)
+                # (optional) annotate selected model
+                try:
+                    LLMObs.annotate(metadata={"selected_model_id": selected_model_id})
+                except Exception:
+                    pass
+                return {**result, "selected_model_id": selected_model_id}
 
         if model.get("pipe"):
-            # Below does not require bypass_filter because this is the only route the uses this function and it is already bypassing the filter
             return await generate_function_chat_completion(
                 request, form_data, user=user, models=models
             )
-        if model.get("owned_by") == "ollama":
-            # Using /ollama/api/chat endpoint
-            form_data = convert_payload_openai_to_ollama(form_data)
+
+        if owned_by == "ollama":
+            ofp = convert_payload_openai_to_ollama(form_data)
             response = await generate_ollama_chat_completion(
                 request=request,
-                form_data=form_data,
+                form_data=ofp,
                 user=user,
                 bypass_filter=bypass_filter,
             )
             if form_data.get("stream"):
                 response.headers["content-type"] = "text/event-stream"
-                return StreamingResponse(
+                out = StreamingResponse(
                     convert_streaming_response_ollama_to_openai(response),
                     headers=dict(response.headers),
                     background=response.background,
                 )
             else:
-                return convert_response_ollama_to_openai(response)
-        else:
-            return await generate_openai_chat_completion(
-                request=request,
-                form_data=form_data,
-                user=user,
-                bypass_filter=bypass_filter,
-            )
+                out = convert_response_ollama_to_openai(response)
+
+            # (optional) annotate outputs
+            try:
+                LLMObs.annotate(output_data=getattr(out, "body", None))
+            except Exception:
+                pass
+            return out
+
+        # default: via your gateway/OpenAI compatible
+        out = await generate_openai_chat_completion(
+            request=request,
+            form_data=form_data,
+            user=user,
+            bypass_filter=bypass_filter,
+        )
+        try:
+            # attempt to annotate the JSON body if available
+            body = getattr(out, "body", None)
+            if body is None and hasattr(out, "json"):
+                body = out.json()
+            LLMObs.annotate(output_data=body)
+        except Exception:
+            pass
+        return out
+
+    # finally, run the decorated inner fn
+    return await _do_generate()
+# @llm(model_name=model, name="llm", model_provider="default")
+# async def generate_chat_completion(
+#     request: Request,
+#     form_data: dict,
+#     user: Any,
+#     bypass_filter: bool = False,
+# ):
+#     log.debug(f"generate_chat_completion: {form_data}")
+#     if BYPASS_MODEL_ACCESS_CONTROL:
+#         bypass_filter = True
+
+#     if hasattr(request.state, "metadata"):
+#         if "metadata" not in form_data:
+#             form_data["metadata"] = request.state.metadata
+#         else:
+#             form_data["metadata"] = {
+#                 **form_data["metadata"],
+#                 **request.state.metadata,
+#             }
+
+#     if getattr(request.state, "direct", False) and hasattr(request.state, "model"):
+#         models = {
+#             request.state.model["id"]: request.state.model,
+#         }
+#         log.debug(f"direct connection to model: {models}")
+#     else:
+#         models = request.app.state.MODELS
+
+#     model_id = form_data["model"]
+#     if model_id not in models:
+#         raise Exception("Model not found")
+
+#     model = models[model_id]
+
+#     if getattr(request.state, "direct", False):
+#         return await generate_direct_chat_completion(
+#             request, form_data, user=user, models=models
+#         )
+#     else:
+#         # Check if user has access to the model
+#         if not bypass_filter and user.role == "user":
+#             try:
+#                 check_model_access(user, model)
+#             except Exception as e:
+#                 raise e
+
+#         if model.get("owned_by") == "arena":
+#             model_ids = model.get("info", {}).get("meta", {}).get("model_ids")
+#             filter_mode = model.get("info", {}).get("meta", {}).get("filter_mode")
+#             if model_ids and filter_mode == "exclude":
+#                 model_ids = [
+#                     model["id"]
+#                     for model in list(request.app.state.MODELS.values())
+#                     if model.get("owned_by") != "arena" and model["id"] not in model_ids
+#                 ]
+
+#             selected_model_id = None
+#             if isinstance(model_ids, list) and model_ids:
+#                 selected_model_id = random.choice(model_ids)
+#             else:
+#                 model_ids = [
+#                     model["id"]
+#                     for model in list(request.app.state.MODELS.values())
+#                     if model.get("owned_by") != "arena"
+#                 ]
+#                 selected_model_id = random.choice(model_ids)
+
+#             form_data["model"] = selected_model_id
+
+#             if form_data.get("stream") == True:
+
+#                 async def stream_wrapper(stream):
+#                     yield f"data: {json.dumps({'selected_model_id': selected_model_id})}\n\n"
+#                     async for chunk in stream:
+#                         yield chunk
+
+#                 response = await generate_chat_completion(
+#                     request, form_data, user, bypass_filter=True
+#                 )
+#                 return StreamingResponse(
+#                     stream_wrapper(response.body_iterator),
+#                     media_type="text/event-stream",
+#                     background=response.background,
+#                 )
+#             else:
+#                 return {
+#                     **(
+#                         await generate_chat_completion(
+#                             request, form_data, user, bypass_filter=True
+#                         )
+#                     ),
+#                     "selected_model_id": selected_model_id,
+#                 }
+
+#         if model.get("pipe"):
+#             # Below does not require bypass_filter because this is the only route the uses this function and it is already bypassing the filter
+#             return await generate_function_chat_completion(
+#                 request, form_data, user=user, models=models
+#             )
+#         if model.get("owned_by") == "ollama":
+#             # Using /ollama/api/chat endpoint
+#             form_data = convert_payload_openai_to_ollama(form_data)
+#             response = await generate_ollama_chat_completion(
+#                 request=request,
+#                 form_data=form_data,
+#                 user=user,
+#                 bypass_filter=bypass_filter,
+#             )
+#             if form_data.get("stream"):
+#                 response.headers["content-type"] = "text/event-stream"
+#                 return StreamingResponse(
+#                     convert_streaming_response_ollama_to_openai(response),
+#                     headers=dict(response.headers),
+#                     background=response.background,
+#                 )
+#             else:
+#                 return convert_response_ollama_to_openai(response)
+#         else:
+#             return await generate_openai_chat_completion(
+#                 request=request,
+#                 form_data=form_data,
+#                 user=user,
+#                 bypass_filter=bypass_filter,
+#             )
 
 
 chat_completion = generate_chat_completion
