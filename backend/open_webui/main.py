@@ -530,12 +530,12 @@ https://github.com/open-webui/open-webui
 if not DATADOG_API_KEY or not DATADOG_SITE:
     raise RuntimeError(f"Missing Datadog config. API_KEY={bool(DATADOG_API_KEY)} SITE={DATADOG_SITE}")
 
-# LLMObs.enable(
-#   ml_app=DATADOG_APP_NAME,
-#   api_key=DATADOG_API_KEY,
-#   site=DATADOG_SITE,
-#   agentless_enabled=True,
-# )
+LLMObs.enable(
+  ml_app=DATADOG_APP_NAME,
+  api_key=DATADOG_API_KEY,
+  site=DATADOG_SITE,
+  agentless_enabled=True,
+)
 
 
 
