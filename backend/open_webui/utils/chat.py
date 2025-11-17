@@ -63,6 +63,37 @@ logging.basicConfig(stream=sys.stdout, level=GLOBAL_LOG_LEVEL)
 log = logging.getLogger(__name__)
 log.setLevel(SRC_LOG_LEVELS["MAIN"])
 
+from typing import Any, Dict, Optional, Tuple
+from datetime import datetime, timezone
+
+def _last_pair(messages: list[dict]) -> Tuple[Optional[dict], Optional[dict]]:
+    """
+    Return the last (user_msg, assistant_msg) pair in the list.
+    We walk from the end to find the last assistant, then the last user before it.
+    """
+    last_assistant = None
+    last_user = None
+    for i in range(len(messages) - 1, -1, -1):
+        m = messages[i]
+        if last_assistant is None and m.get("role") == "assistant":
+            last_assistant = m
+        elif last_assistant is not None and m.get("role") == "user":
+            last_user = m
+            break
+    return last_user, last_assistant
+
+def _usage_from_messages(messages: list[dict]) -> Optional[dict]:
+    # Prefer usage on the final assistant message
+    for m in reversed(messages or []):
+        if m.get("role") == "assistant" and isinstance(m.get("usage"), dict):
+            return m["usage"]
+    return None
+
+def _corr_id(form_data: dict) -> str:
+    chat_id = form_data.get("chat_id") or form_data.get("metadata", {}).get("chat_id") or "unknown_chat"
+    msg_id  = form_data.get("id") or form_data.get("metadata", {}).get("message_id") or "unknown_msg"
+    return f"{chat_id}:{msg_id}"
+
 
 async def generate_direct_chat_completion(
     request: Request,
@@ -445,25 +476,93 @@ async def generate_chat_completion(
 
 chat_completion = generate_chat_completion
 
-
+@llm(model_name="(post)", model_provider="ai-gateway", name="chat.completed")
 async def chat_completed(request: Request, form_data: dict, user: Any):
+    # Ensure models cache is warm (your existing code)
     if not request.app.state.MODELS:
         await get_all_models(request, user=user)
 
+    # Resolve models map (your existing code)
     if getattr(request.state, "direct", False) and hasattr(request.state, "model"):
-        models = {
-            request.state.model["id"]: request.state.model,
-        }
+        models = {request.state.model["id"]: request.state.model}
     else:
         models = request.app.state.MODELS
 
     data = form_data
-    model_id = data["model"]
-    if model_id not in models:
+    model_id = data.get("model") or data.get("metadata", {}).get("model", {}).get("id")
+    if not model_id or model_id not in models:
         raise Exception("Model not found")
 
     model = models[model_id]
-    print(f"POST FORM DATA: {form_data}")
+    owned_by = (model.get("owned_by") or "").lower()
+    model_name_str = model.get("id") or model_id or "unknown"
+
+    # Build input/output from the last exchange
+    messages = data.get("messages") or []
+    user_msg, assistant_msg = _last_pair(messages)
+
+    # Fallbacks if something is missing
+    input_data = []
+    output_data = []
+    if user_msg:
+        input_data.append({"role": "user", "content": user_msg.get("content", "")})
+    if assistant_msg:
+        output_data.append({"role": "assistant", "content": assistant_msg.get("content", "")})
+
+    # Token usage (if present)
+    usage = _usage_from_messages(messages)
+    metrics = None
+    if usage:
+        metrics = {
+            "input_tokens": usage.get("prompt_tokens"),
+            "output_tokens": usage.get("completion_tokens"),
+            "total_tokens": usage.get("total_tokens"),
+            # keep any detailed fields if you like:
+            # "prompt_tokens_details.reasoning_tokens": usage.get("prompt_tokens_details", {}).get("reasoning_tokens")
+        }
+
+    # Correlation + rich metadata (great for DD facets)
+    corr_id = _corr_id(data)
+    md = {
+        "chat_id":     data.get("chat_id") or data.get("metadata", {}).get("chat_id"),
+        "message_id":  data.get("id") or data.get("metadata", {}).get("message_id"),
+        "session_id":  data.get("session_id") or data.get("metadata", {}).get("session_id"),
+        "user_id":     getattr(user, "id", None),
+        "model":       model_name_str,
+        "model_owner": owned_by,
+        "direct":      bool(getattr(request.state, "direct", False)),
+        "stream":      bool(data.get("stream")),
+        "correlation_id": corr_id,
+        # Optional: useful when analyzing latency windows
+        "completed_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+    # Tags — include MINA with the model name exactly as requested
+    tags = {
+        "MINA": model_name_str,         # <—— required by you
+        "model_provider": owned_by or "gateway",
+        "correlation_id": corr_id,
+        # Add your service/env/site if you want to facet in DD:
+        # "service": "openwebui",
+        # "env": "prod",
+        # "site": "datadoghq.com",
+    }
+
+    # Single, final annotation per completed turn
+    try:
+        LLMObs.annotate(
+            span=None,                    # we’re emitting a standalone, final annotation
+            input_data=input_data,        # last user question
+            output_data=output_data,      # final assistant answer
+            metadata=md,                  # stable, facetable metadata
+            metrics=metrics,              # tokens if available
+            tags=tags,                    # includes MINA
+        )
+    except Exception as e:
+        # Don’t break the chat on annotation failure; log and continue
+        log.warning(f"LLMObs final annotate failed: {e}")
+
+    # ---- continue with your existing post-processing path unchanged ----
     try:
         data = await process_pipeline_outlet_filter(request, data, user, models)
     except Exception as e:
@@ -488,12 +587,9 @@ async def chat_completed(request: Request, form_data: dict, user: Any):
 
     try:
         filter_functions = [
-            Functions.get_function_by_id(filter_id)
-            for filter_id in get_sorted_filter_ids(
-                request, model, metadata.get("filter_ids", [])
-            )
+            Functions.get_function_by_id(fid)
+            for fid in get_sorted_filter_ids(request, model, metadata.get("filter_ids", []))
         ]
-
         result, _ = await process_filter_functions(
             request=request,
             filter_functions=filter_functions,
@@ -504,6 +600,77 @@ async def chat_completed(request: Request, form_data: dict, user: Any):
         return result
     except Exception as e:
         return Exception(f"Error: {e}")
+
+# @llm(model_name="(post)", model_provider="gateway", name="chat.completed")
+# async def chat_completed(request: Request, form_data: dict, user: Any):
+#     if not request.app.state.MODELS:
+#         await get_all_models(request, user=user)
+
+#     if getattr(request.state, "direct", False) and hasattr(request.state, "model"):
+#         models = {
+#             request.state.model["id"]: request.state.model,
+#         }
+#     else:
+#         models = request.app.state.MODELS
+
+#     data = form_data
+#     model_id = data["model"]
+#     if model_id not in models:
+#         raise Exception("Model not found")
+
+#     model = models[model_id]
+
+#     LLMObs.annotate(
+#         model_name = form_data{}
+#         input_data=data,
+#         output_data=data,
+#         metadata={
+#             "chat_id": data["chat_id"],
+#             "message_id": data["id"],
+#             "session_id": data["session_id"],
+#             "user_id": user.id,
+#         },
+#     )
+#     try:
+#         data = await process_pipeline_outlet_filter(request, data, user, models)
+#     except Exception as e:
+#         return Exception(f"Error: {e}")
+
+#     metadata = {
+#         "chat_id": data["chat_id"],
+#         "message_id": data["id"],
+#         "filter_ids": data.get("filter_ids", []),
+#         "session_id": data["session_id"],
+#         "user_id": user.id,
+#     }
+
+#     extra_params = {
+#         "__event_emitter__": get_event_emitter(metadata),
+#         "__event_call__": get_event_call(metadata),
+#         "__user__": user.model_dump() if isinstance(user, UserModel) else {},
+#         "__metadata__": metadata,
+#         "__request__": request,
+#         "__model__": model,
+#     }
+
+#     try:
+#         filter_functions = [
+#             Functions.get_function_by_id(filter_id)
+#             for filter_id in get_sorted_filter_ids(
+#                 request, model, metadata.get("filter_ids", [])
+#             )
+#         ]
+
+#         result, _ = await process_filter_functions(
+#             request=request,
+#             filter_functions=filter_functions,
+#             filter_type="outlet",
+#             form_data=data,
+#             extra_params=extra_params,
+#         )
+#         return result
+#     except Exception as e:
+#         return Exception(f"Error: {e}")
 
 
 async def chat_action(request: Request, action_id: str, form_data: dict, user: Any):

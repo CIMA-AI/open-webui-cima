@@ -538,7 +538,6 @@ if not DATADOG_API_KEY or not DATADOG_SITE:
 # )
 
 
-print("Not this time")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
