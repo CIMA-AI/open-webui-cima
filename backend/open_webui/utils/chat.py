@@ -210,10 +210,10 @@ async def generate_chat_completion(
         # everything else via your LiteLLM gateway
         model_provider = "gateway"
 
-    # ---- define a decorated inner fn with the strings baked in
+    
+    log.info(f"form_data inside _do_generate: {form_data}")
     @llm(model_name=model_name_str, model_provider=model_provider, name="chat.completions.create")
     async def _do_generate():
-        # (optional) annotate inputs for richer span details
         try:
             LLMObs.annotate(
                 input_data=form_data.get("messages"),
@@ -463,7 +463,7 @@ async def chat_completed(request: Request, form_data: dict, user: Any):
         raise Exception("Model not found")
 
     model = models[model_id]
-
+    print(f"POST FORM DATA: {form_data}")
     try:
         data = await process_pipeline_outlet_filter(request, data, user, models)
     except Exception as e:
