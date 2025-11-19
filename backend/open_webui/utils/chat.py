@@ -14,7 +14,18 @@ from fastapi import Request, status
 from starlette.responses import Response, StreamingResponse, JSONResponse
 from ddtrace.llmobs import LLMObs
 from ddtrace.llmobs.decorators import llm
-from ddtrace.llmobs.types import Prompt
+
+# [CIMA+ Datadog Hallucination] Try to import Prompt class
+try:
+    from ddtrace.llmobs.types import Prompt
+    HALLUCINATION_DETECTION_AVAILABLE = True
+except ImportError:
+    try:
+        from ddtrace.llmobs.utils import Prompt
+        HALLUCINATION_DETECTION_AVAILABLE = True
+    except ImportError:
+        Prompt = None
+        HALLUCINATION_DETECTION_AVAILABLE = False
 
 from open_webui.models.users import UserModel
 
@@ -63,6 +74,12 @@ from open_webui.env import SRC_LOG_LEVELS, GLOBAL_LOG_LEVEL, BYPASS_MODEL_ACCESS
 logging.basicConfig(stream=sys.stdout, level=GLOBAL_LOG_LEVEL)
 log = logging.getLogger(__name__)
 log.setLevel(SRC_LOG_LEVELS["MAIN"])
+
+# [CIMA+ Datadog Hallucination] Log Prompt import status
+if HALLUCINATION_DETECTION_AVAILABLE:
+    log.info("[CIMA+ Datadog Hallucination] Prompt class imported successfully - hallucination detection enabled")
+else:
+    log.warning("[CIMA+ Datadog Hallucination] Prompt class not available - hallucination detection disabled. Please upgrade ddtrace to >=2.20.0")
 
 from typing import Any, Dict, Optional, Tuple
 from datetime import datetime, timezone
@@ -260,8 +277,10 @@ async def generate_chat_completion(
 
         # [CIMA+ Datadog Hallucination] Check for RAG context for hallucination detection
         rag_context = form_data.get("metadata", {}).get("rag_context")
-        if rag_context:
+        if rag_context and HALLUCINATION_DETECTION_AVAILABLE:
             log.info(f"[CIMA+ Datadog Hallucination] RAG context found, will apply annotation_context for hallucination detection")
+        elif rag_context and not HALLUCINATION_DETECTION_AVAILABLE:
+            log.warning(f"[CIMA+ Datadog Hallucination] RAG context found but Prompt class not available - skipping hallucination detection")
 
         # --- your existing branching logic unchanged ---
         if model.get("owned_by") == "arena":
@@ -314,7 +333,7 @@ async def generate_chat_completion(
             ofp = convert_payload_openai_to_ollama(form_data)
 
             # [CIMA+ Datadog Hallucination] Wrap Ollama call with annotation_context if RAG context exists
-            if rag_context:
+            if rag_context and HALLUCINATION_DETECTION_AVAILABLE:
                 log.info(f"[CIMA+ Datadog Hallucination] Applying annotation_context for Ollama call")
                 with LLMObs.annotation_context(
                     prompt=Prompt(
@@ -359,7 +378,7 @@ async def generate_chat_completion(
 
         # default: via your gateway/OpenAI compatible
         # [CIMA+ Datadog Hallucination] Wrap OpenAI call with annotation_context if RAG context exists
-        if rag_context:
+        if rag_context and HALLUCINATION_DETECTION_AVAILABLE:
             log.info(f"[CIMA+ Datadog Hallucination] Applying annotation_context for OpenAI/gateway call")
             with LLMObs.annotation_context(
                 prompt=Prompt(

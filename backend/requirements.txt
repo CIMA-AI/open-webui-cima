@@ -151,5 +151,5 @@ opentelemetry-instrumentation-logging==0.57b0
 opentelemetry-instrumentation-httpx==0.57b0
 opentelemetry-instrumentation-aiohttp-client==0.57b0
 # Datadog Trace SDK
-# ddtrace>=2.20.0
-ddtrace
+ddtrace>=2.20.0
+# ddtrace
