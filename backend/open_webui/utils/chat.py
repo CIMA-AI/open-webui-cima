@@ -14,7 +14,7 @@ from fastapi import Request, status
 from starlette.responses import Response, StreamingResponse, JSONResponse
 from ddtrace.llmobs import LLMObs
 from ddtrace.llmobs.decorators import llm
-from ddtrace.llmobs.utils import Prompt
+from ddtrace.llmobs.types import Prompt
 
 from open_webui.models.users import UserModel
 
