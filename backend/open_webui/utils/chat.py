@@ -14,6 +14,7 @@ from fastapi import Request, status
 from starlette.responses import Response, StreamingResponse, JSONResponse
 from ddtrace.llmobs import LLMObs
 from ddtrace.llmobs.decorators import llm
+from ddtrace.llmobs.utils import Prompt
 
 from open_webui.models.users import UserModel
 
@@ -257,6 +258,11 @@ async def generate_chat_completion(
         except Exception:
             pass
 
+        # [CIMA+ Datadog Hallucination] Check for RAG context for hallucination detection
+        rag_context = form_data.get("metadata", {}).get("rag_context")
+        if rag_context:
+            log.info(f"[CIMA+ Datadog Hallucination] RAG context found, will apply annotation_context for hallucination detection")
+
         # --- your existing branching logic unchanged ---
         if model.get("owned_by") == "arena":
             model_ids = model.get("info", {}).get("meta", {}).get("model_ids")
@@ -306,12 +312,34 @@ async def generate_chat_completion(
 
         if owned_by == "ollama":
             ofp = convert_payload_openai_to_ollama(form_data)
-            response = await generate_ollama_chat_completion(
-                request=request,
-                form_data=ofp,
-                user=user,
-                bypass_filter=bypass_filter,
-            )
+
+            # [CIMA+ Datadog Hallucination] Wrap Ollama call with annotation_context if RAG context exists
+            if rag_context:
+                log.info(f"[CIMA+ Datadog Hallucination] Applying annotation_context for Ollama call")
+                with LLMObs.annotation_context(
+                    prompt=Prompt(
+                        variables={
+                            "user_question": rag_context.get("user_query", ""),
+                            "context": rag_context.get("context", "")
+                        },
+                        rag_query_variables=["user_question"],
+                        rag_context_variables=["context"]
+                    )
+                ):
+                    response = await generate_ollama_chat_completion(
+                        request=request,
+                        form_data=ofp,
+                        user=user,
+                        bypass_filter=bypass_filter,
+                    )
+            else:
+                response = await generate_ollama_chat_completion(
+                    request=request,
+                    form_data=ofp,
+                    user=user,
+                    bypass_filter=bypass_filter,
+                )
+
             if form_data.get("stream"):
                 response.headers["content-type"] = "text/event-stream"
                 out = StreamingResponse(
@@ -330,12 +358,33 @@ async def generate_chat_completion(
             return out
 
         # default: via your gateway/OpenAI compatible
-        out = await generate_openai_chat_completion(
-            request=request,
-            form_data=form_data,
-            user=user,
-            bypass_filter=bypass_filter,
-        )
+        # [CIMA+ Datadog Hallucination] Wrap OpenAI call with annotation_context if RAG context exists
+        if rag_context:
+            log.info(f"[CIMA+ Datadog Hallucination] Applying annotation_context for OpenAI/gateway call")
+            with LLMObs.annotation_context(
+                prompt=Prompt(
+                    variables={
+                        "user_question": rag_context.get("user_query", ""),
+                        "context": rag_context.get("context", "")
+                    },
+                    rag_query_variables=["user_question"],
+                    rag_context_variables=["context"]
+                )
+            ):
+                out = await generate_openai_chat_completion(
+                    request=request,
+                    form_data=form_data,
+                    user=user,
+                    bypass_filter=bypass_filter,
+                )
+        else:
+            out = await generate_openai_chat_completion(
+                request=request,
+                form_data=form_data,
+                user=user,
+                bypass_filter=bypass_filter,
+            )
+
         try:
             # attempt to annotate the JSON body if available
             body = getattr(out, "body", None)

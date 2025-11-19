@@ -1001,6 +1001,13 @@ async def process_chat_payload(request, form_data, user, metadata, model):
             raise Exception("No user message found")
 
         if context_string != "":
+            # [CIMA+ Datadog Hallucination] Store RAG context in metadata for hallucination detection
+            metadata["rag_context"] = {
+                "user_query": prompt,
+                "context": context_string,
+            }
+            log.info(f"[CIMA+ Datadog Hallucination] RAG context stored - user_query length: {len(prompt)}, context length: {len(context_string)}")
+
             # Workaround for Ollama 2.0+ system prompt issue
             # TODO: replace with add_or_update_system_message
             if model.get("owned_by") == "ollama":
