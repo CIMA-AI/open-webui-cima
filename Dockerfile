@@ -116,12 +116,12 @@ RUN apt-get update && \
     libreoffice-core libreoffice-common \
     libreoffice-writer libreoffice-calc libreoffice-impress libreoffice-draw \ 
     ffmpeg libsm6 libxext6 \
-    # MS fonts installer
-    #fontconfig ttf-mscorefonts-installer \
-    #fonts-crosextra-carlito fonts-crosextra-caladea \
     && rm -rf /var/lib/apt/lists/*
 
-    
+# Install Microsoft core fonts
+RUN echo "deb http://us-west-2.ec2.archive.ubuntu.com/ubuntu/ trusty multiverse
+deb http://us-west-2.ec2.archive.ubuntu.com/ubuntu/ trusty-updates multiverse
+deb http://us-west-2.ec2.archive.ubuntu.com/ubuntu/ trusty-backports main restricted universe multiverse" | tee /etc/apt/sources.list.d/multiverse.list
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
     ttf-mscorefonts-installer \
