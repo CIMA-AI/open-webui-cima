@@ -119,14 +119,20 @@ RUN apt-get update && \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Microsoft core fonts
-RUN echo "deb http://us-west-2.ec2.archive.ubuntu.com/ubuntu/ trusty multiverse
-deb http://us-west-2.ec2.archive.ubuntu.com/ubuntu/ trusty-updates multiverse
-deb http://us-west-2.ec2.archive.ubuntu.com/ubuntu/ trusty-backports main restricted universe multiverse" | tee /etc/apt/sources.list.d/multiverse.list
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
-    ttf-mscorefonts-installer \
-    && rm -rf /var/lib/apt/lists/*
-RUN fc-cache -fv
+RUN mkdir -p /usr/share/fonts/truetype/msttcorefonts && \
+    cd /usr/share/fonts/truetype/msttcorefonts && \
+    apt-get update && apt-get install -y cabextract wget && \
+    wget https://downloads.sourceforge.net/corefonts/andale32.exe && \
+    wget https://downloads.sourceforge.net/corefonts/arial32.exe && \
+    wget https://downloads.sourceforge.net/corefonts/arialb32.exe && \
+    wget https://downloads.sourceforge.net/corefonts/comic32.exe && \
+    wget https://downloads.sourceforge.net/corefonts/courie32.exe && \
+    wget https://downloads.sourceforge.net/corefonts/georgi32.exe && \
+    wget https://downloads.sourceforge.net/corefonts/impact32.exe && \
+    wget https://downloads.sourceforge.net/corefonts/times32.exe && \
+    cabextract *.exe && \
+    rm *.exe && \
+    fc-cache -fv
 
 # install python dependencies
 COPY --chown=$UID:$GID ./backend/requirements.txt ./requirements.txt
