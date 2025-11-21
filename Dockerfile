@@ -116,7 +116,13 @@ RUN apt-get update && \
     libreoffice-core libreoffice-common \
     libreoffice-writer libreoffice-calc libreoffice-impress libreoffice-draw \ 
     ffmpeg libsm6 libxext6 \
+    # MS fonts installer
+    fontconfig ttf-mscorefonts-installer \
+    fonts-crosextra-carlito fonts-crosextra-caladea \
     && rm -rf /var/lib/apt/lists/*
+
+    
+
 
 # install python dependencies
 COPY --chown=$UID:$GID ./backend/requirements.txt ./requirements.txt
